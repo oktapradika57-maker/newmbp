@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 
 # Konfigurasi Halaman
-str.set_page_config(
+st.set_page_config(
     page_title="Genset Backup Monitor",
     page_icon="⚡",
     layout="wide",
@@ -14,17 +14,21 @@ str.set_page_config(
 SPREADSHEET_ID = "1CrupWIBU3NP49ORN3AxC6ave7SD01ds_odu7NVBOIoI"
 csv_url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/export?format=csv&gid=0"
 
-str.title("⚡ Genset Backup Monitor")
-str.caption("Komparasi Durasi Nyata (Waktu Start/Stop) vs Running Hours (RH) Genset")
+st.title("⚡ Genset Backup Monitor")
+st.caption("Komparasi Durasi Nyata (Waktu Start/Stop) vs Running Hours (RH) Genset")
+
+# Tombol Refresh Data
+if st.button("🔄 Refresh Data", type="primary"):
+    st.rerun()
 
 # Memuat Data dari Google Sheets
-@str.cache_data(ttl=60) 
+@st.cache_data(ttl=60) 
 def load_data(url):
     try:
         df = pd.read_csv(url)
         return df
     except Exception as e:
-        str.error(f"Gagal mengambil data dari Google Sheets. Pastikan link sudah 'Anyone with link can view'. Error: {e}")
+        st.error(f"Gagal mengambil data dari Google Sheets. Pastikan link sudah 'Anyone with link can view'. Error: {e}")
         return None
 
 df_raw = load_data(csv_url)
@@ -32,9 +36,11 @@ df_raw = load_data(csv_url)
 if df_raw is not None and not df_raw.empty:
     cols = df_raw.columns
     
-    # 1. Identifikasi Kolom Utama (Eksisting)
+    # 1. Identifikasi Kolom Utama
     start_backup_col = next((c for c in cols if 'start' in c.lower() and ('backup' in c.lower() or 'waktu' in c.lower())), None)
     stop_backup_col = next((c for c in cols if 'stop' in c.lower() and ('backup' in c.lower() or 'waktu' in c.lower())), None)
+    
+    # Perbaikan logic gate pencarian kolom RH
     rh_start_col = next((c for c in cols if ('rh' in c.lower() and 'start' in c.lower())), None)
     rh_stop_col = next((c for c in cols if ('rh' in c.lower() and 'stop' in c.lower())), None)
 
@@ -44,8 +50,8 @@ if df_raw is not None and not df_raw.empty:
     tiket_col = next((c for c in cols if 'tiket' in c.lower() or 'ticket' in c.lower() or 'no' in c.lower()), None)
 
     if not all([start_backup_col, stop_backup_col, rh_start_col, rh_stop_col]):
-        str.warning("⚠️ Beberapa kolom krusial tidak ditemukan. Pastikan nama kolom di Google Sheets mengandung kata kunci 'Start Backup', 'Stop Backup', 'RH Start', dan 'RH Stop'.")
-        str.write("Kolom yang terdeteksi di sheet Anda:", list(cols))
+        st.warning("⚠️ Beberapa kolom krusial tidak ditemukan. Pastikan nama kolom di Google Sheets mengandung kata kunci 'Start Backup', 'Stop Backup', 'RH Start', dan 'RH Stop'.")
+        st.write("Kolom yang terdeteksi di sheet Anda:", list(cols))
     else:
         # --- PRE-PROCESSING DATA ---
         df = df_raw.copy()
@@ -61,19 +67,20 @@ if df_raw is not None and not df_raw.empty:
         df['Durasi RH (Jam)'] = np.where(df[rh_stop_col] >= df[rh_start_col], df[rh_stop_col] - df[rh_start_col], 0).round(2)
         df['Selisih (Jam)'] = (df['Durasi Waktu Nyata (Jam)'] - df['Durasi RH (Jam)']).abs().round(2)
 
-        # Pastikan kolom pencarian bertipe string agar tidak error saat difilter
+        # FIX: Menggunakan tipe data bawaan Python objek 'str' yang murni, bukan alias streamlit
         for c in [site_id_col, pic_col, tiket_col]:
-            if c: df[c] = df[c].astype(str).fillna('')
+            if c: 
+                df[c] = df[c].astype(object).astype(str).fillna('')
 
         # --- SIDEBAR PANEL PENCARIAN & FILTER ---
-        str.sidebar.header("🔍 Panel Pencarian")
+        st.sidebar.header("🔍 Panel Pencarian")
         
-        search_site = str.sidebar.text_input("Cari Site ID")
-        search_pic = str.sidebar.text_input("Cari PIC Take Over")
-        search_tiket = str.sidebar.text_input("Cari Nomor Tiket")
+        search_site = st.sidebar.text_input("Cari Site ID")
+        search_pic = st.sidebar.text_input("Cari PIC Take Over")
+        search_tiket = st.sidebar.text_input("Cari Nomor Tiket")
         
-        if str.sidebar.button("🔄 Refresh Data & Reset Filter", type="primary", use_container_width=True):
-            str.rerun()
+        if st.sidebar.button("🔄 Reset Filter", use_container_width=True):
+            st.rerun()
 
         # Proses Filtering Berdasarkan Input User
         df_filtered = df.copy()
@@ -84,42 +91,39 @@ if df_raw is not None and not df_raw.empty:
         if search_tiket and tiket_col:
             df_filtered = df_filtered[df_filtered[tiket_col].str.contains(search_tiket, case=False, na=False)]
 
-        # --- TAMPILAN KPI METRICS (Berdasarkan Data Terfilter) ---
+        # --- TAMPILAN KPI METRICS ---
         total_backup = len(df_filtered)
         total_waktu_nyata = df_filtered['Durasi Waktu Nyata (Jam)'].sum()
         total_rh = df_filtered['Durasi RH (Jam)'].sum()
 
-        col1, col2, col3 = str.columns(3)
+        col1, col2, col3 = st.columns(3)
         with col1:
-            str.metric(label="Total Kejadian Backup", value=f"{total_backup} Kali")
+            st.metric(label="Total Kejadian Backup", value=f"{total_backup} Kali")
         with col2:
-            str.metric(label="Total Akumulasi Waktu Nyata", value=f"{total_waktu_nyata:.2f} Jam")
+            st.metric(label="Total Akumulasi Waktu Nyata", value=f"{total_waktu_nyata:.2f} Jam")
         with col3:
-            str.metric(label="Total Akumulasi RH Genset", value=f"{total_rh:.2f} Jam")
+            st.metric(label="Total Akumulasi RH Genset", value=f"{total_rh:.2f} Jam")
 
-        str.markdown("---")
+        st.markdown("---")
 
         # --- TAMPILAN GRAFIK ANALISA ---
-        str.subheader("📊 Grafik Analisa Durasi Backup")
+        st.subheader("📊 Grafik Analisa Durasi Backup")
         if not df_filtered.empty:
-            # Siapkan dataframe khusus untuk kebutuhan visualisasi chart
             chart_data = pd.DataFrame({
                 'Durasi Nyata (Jam)': df_filtered['Durasi Waktu Nyata (Jam)'].values,
                 'Durasi RH (Jam)': df_filtered['Durasi RH (Jam)'].values
             }, index=df_filtered[site_id_col].values if site_id_col else range(1, len(df_filtered) + 1))
             
-            # Menampilkan Grafik Batang Perbandingan
-            str.bar_chart(chart_data, y=['Durasi Nyata (Jam)', 'Durasi RH (Jam)'], color=["#3b82f6", "#f59e0b"])
+            st.bar_chart(chart_data, y=['Durasi Nyata (Jam)', 'Durasi RH (Jam)'], color=["#3b82f6", "#f59e0b"])
         else:
-            str.info("Tidak ada data untuk menampilkan grafik.")
+            st.info("Tidak ada data untuk menampilkan grafik.")
 
-        str.markdown("---")
+        st.markdown("---")
 
         # --- TAMPILAN TABEL LOG DATA ---
-        str.subheader("📋 Log Perhitungan & Komparasi Data")
+        st.subheader("📋 Log Perhitungan & Komparasi Data")
         
         if not df_filtered.empty:
-            # Susun kolom tabel secara rapi termasuk informasi baru yang diminta
             df_display = pd.DataFrame({
                 "No": range(1, len(df_filtered) + 1),
                 "Site ID": df_filtered[site_id_col] if site_id_col else "-",
@@ -134,8 +138,8 @@ if df_raw is not None and not df_raw.empty:
                 "Selisih Komparasi": df_filtered['Selisih (Jam)'].map("{:.2f} Jam".format)
             })
 
-            str.dataframe(df_display, use_container_width=True, hide_index=True)
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
         else:
-            str.warning("Data tidak ditemukan. Silakan periksa kembali kata kunci pencarian Anda pada sidebar.")
+            st.warning("Data tidak ditemukan. Silakan periksa kembali kata kunci pencarian Anda pada sidebar.")
 else:
-    str.info("Belum ada data atau spreadsheet kosong.")
+    st.info("Belum ada data atau spreadsheet kosong.")
