@@ -1,6 +1,5 @@
 streamlit
 pandas
 fpdf2
-google-api-python-client
-google-auth
+requests
 Pillow
