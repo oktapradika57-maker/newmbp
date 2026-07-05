@@ -13,38 +13,39 @@ from io import BytesIO
 st.set_page_config(page_title="PDF Generator PJB", layout="wide")
 
 def extract_file_id(url):
-    """Mengekstrak ID file unik dari URL Google Drive menggunakan Regex tingkat lanjut"""
-    # Mencari pola karakter unik Google Drive ID (biasanya minimal 25 karakter)
+    """Mengekstrak ID file unik dari URL Google Drive menggunakan Regex"""
     match = re.search(r'[-\w]{25,}', url)
     if match:
         return match.group(0)
     return None
 
 def download_image_public(file_id):
-    """Sistem unduhan ganda (Dual-Engine) agar kebal dari pemblokiran Google"""
+    """
+    Sistem unduhan 3 lapis untuk menembus pemblokiran Google Drive.
+    """
     session = requests.Session()
+    # Menyamar sebagai browser modern
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
     }
     
-    # 1. Coba Endpoint Direct Download
-    url1 = f"https://drive.google.com/uc?export=download&id={file_id}"
-    try:
-        r1 = session.get(url1, headers=headers, timeout=10)
-        if r1.status_code == 200 and 'text/html' not in r1.headers.get('Content-Type', ''):
-            return BytesIO(r1.content)
-    except:
-        pass
-        
-    # 2. Coba Endpoint Thumbnail API (sebagai cadangan jika akses langsung ditolak)
-    url2 = f"https://drive.google.com/thumbnail?id={file_id}&sz=w1000"
-    try:
-        r2 = session.get(url2, headers=headers, timeout=10)
-        if r2.status_code == 200 and 'text/html' not in r2.headers.get('Content-Type', ''):
-            return BytesIO(r2.content)
-    except:
-        pass
-        
+    # Daftar 3 jalur unduhan rahasia Google Drive
+    endpoints = [
+        f"https://drive.usercontent.google.com/download?id={file_id}&export=download", # Endpoint terbaru Google
+        f"https://drive.google.com/uc?export=download&id={file_id}",                   # Endpoint klasik
+        f"https://drive.google.com/thumbnail?id={file_id}&sz=w1000"                    # Endpoint Thumbnail API
+    ]
+    
+    for url in endpoints:
+        try:
+            response = session.get(url, headers=headers, timeout=15, allow_redirects=True)
+            # Pastikan yang didownload benar-benar gambar (bukan halaman error HTML)
+            if response.status_code == 200 and 'text/html' not in response.headers.get('Content-Type', ''):
+                return BytesIO(response.content)
+        except Exception:
+            continue
+            
     return None
 
 def create_pdf(images_data):
@@ -84,19 +85,19 @@ def main():
         try:
             df = pd.read_csv(csv_export_url)
         except Exception:
-            st.error("🚨 Gagal membaca Spreadsheet.")
+            st.error("🚨 Gagal membaca Spreadsheet. Pastikan link Sheet benar-benar publik.")
             return
 
     if df.empty:
-        st.warning("Data kosong.")
+        st.warning("Data pada Sheet tersebut kosong.")
         return
 
-    # Ambil kolom tanggal (kolom pertama)
+    # Ambil kolom tanggal (Asumsi di kolom pertama/Indeks 0)
     date_col = df.columns[0]
     df['Date_Parsed'] = pd.to_datetime(df[date_col], dayfirst=True, errors='coerce').dt.date
     df = df.dropna(subset=['Date_Parsed'])
 
-    st.subheader("Filter Tanggal")
+    st.subheader("Filter Tanggal Laporan")
     col1, col2 = st.columns(2)
     with col1:
         start_date = st.date_input("Tanggal Mulai", value=datetime.date.today())
@@ -110,25 +111,43 @@ def main():
     mask = (df['Date_Parsed'] >= start_date) & (df['Date_Parsed'] <= end_date)
     filtered_df = df.loc[mask]
     
-    st.write(f"Ditemukan **{len(filtered_df)} baris data** pada rentang tanggal tersebut.")
+    st.write(f"Ditemukan **{len(filtered_df)} baris data** pada rentang waktu ini.")
     
+    # ---------------------------------------------------------
+    # MENAMPILKAN TABEL HANYA UNTUK KOLOM E, G, DAN U
+    # Indeks Excel: A=0, B=1, C=2, D=3, E=4, F=5, G=6 ... U=20
+    # ---------------------------------------------------------
+    try:
+        cols_to_show = []
+        if df.shape[1] > 4: cols_to_show.append(df.columns[4])   # Kolom E
+        if df.shape[1] > 6: cols_to_show.append(df.columns[6])   # Kolom G
+        if df.shape[1] > 20: cols_to_show.append(df.columns[20]) # Kolom U
+        
+        if cols_to_show:
+            st.dataframe(filtered_df[cols_to_show])
+        else:
+            st.dataframe(filtered_df) # Tampilkan semua jika total kolom kurang dari U
+    except Exception:
+        st.dataframe(filtered_df) # Fallback aman jika terjadi error pemotongan tabel
+        
+    st.markdown("---")
+
     if st.button("Tarik Gambar & Proses PDF"):
         if filtered_df.empty:
             st.warning("Tidak ada data untuk tanggal ini.")
             return
             
         images_bytes = []
-        progress_bar = st.progress(0, text="Memulai pemindaian link...")
+        progress_bar = st.progress(0, text="Memulai pemindaian tautan Drive...")
         total_rows = len(filtered_df)
         
         total_links_found = 0
         total_downloads_success = 0
         
-        with st.spinner("Memindai dan mengunduh gambar..."):
+        with st.spinner("Memindai sel dan mengunduh gambar..."):
             for idx, (index, row) in enumerate(filtered_df.iterrows()):
                 
-                # SENSOR PINTAR: Memindai seluruh sel di baris ini, bukan cuma N-T
-                # Aplikasi otomatis mendeteksi mana sel yang kosong dan mana yang berisi link
+                # Memindai seluruh sel di baris yang sedang diproses
                 for col_name in df.columns:
                     cell_value = str(row[col_name])
                     
@@ -145,11 +164,10 @@ def main():
                                     
                 progress_bar.progress(int(((idx + 1) / total_rows) * 100), text=f"Selesai memproses baris ke-{idx + 1}")
 
-        # Tampilkan laporan agar Anda tahu apa yang terjadi di balik layar
-        st.info(f"📊 Laporan Sistem: Ditemukan {total_links_found} tautan Google Drive, dan berhasil mengunduh {total_downloads_success} gambar.")
+        st.info(f"📊 Laporan Sistem: Ditemukan {total_links_found} tautan, dan berhasil mengunduh {total_downloads_success} gambar.")
 
         if images_bytes:
-            with st.spinner("Merakit PDF..."):
+            with st.spinner("Merakit gambar menjadi file PDF..."):
                 try:
                     pdf_data = create_pdf(images_bytes)
                     st.success("🎉 PDF Berhasil Dibuat!")
@@ -160,13 +178,13 @@ def main():
                         mime="application/pdf"
                     )
                 except Exception as e:
-                    st.error("Gagal menyatukan PDF.")
+                    st.error("Gagal menyatukan gambar ke PDF. Pastikan format gambar normal (JPG/PNG).")
                     st.code(traceback.format_exc())
         else:
             if total_links_found > 0:
-                st.error("Sistem menemukan link-nya, namun akses unduhnya ditolak oleh Google Drive. Pastikan folder benar-benar Publik (Anyone with the link).")
+                st.error("Sistem menemukan tautannya, namun Google masih memblokir unduhan anonim. Sebagai alternatif terakhir, Anda bisa mencoba menyalin kode ini ke Google Colab.")
             else:
-                st.error("Tidak ada link Google Drive yang terdeteksi sama sekali pada tanggal yang difilter. Coba rentang tanggal lain.")
+                st.warning("Tidak ada link Google Drive yang terdeteksi sama sekali pada tabel data yang difilter.")
 
 if __name__ == "__main__":
     main()
