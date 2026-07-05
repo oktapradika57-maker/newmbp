@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import re
@@ -7,35 +6,42 @@ import os
 import urllib.parse
 import datetime
 import traceback
+import json
 from fpdf import FPDF
-import gdown
+from io import BytesIO
+
+# Pustaka Resmi Google API
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
 
 st.set_page_config(page_title="PDF Generator PJB", layout="wide")
 
 def extract_file_id(url):
-    """Mengekstrak ID file unik dari URL Google Drive menggunakan Regex"""
+    """Mengekstrak ID file unik dari URL Google Drive"""
     match = re.search(r'[-\w]{25,}', url)
     if match: return match.group(0)
     return None
 
-def create_pdf(image_paths):
-    """Menyatukan semua file fisik lokal ke PDF"""
+def create_pdf(images_data):
+    """Menyatukan semua file ke PDF"""
     pdf = FPDF()
-    for img_path in image_paths:
+    for img_bytes in images_data:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_img:
+            tmp_img.write(img_bytes.read())
+            tmp_path = tmp_img.name
+            
         pdf.add_page()
-        # Margin kiri 10, atas 10, lebar gambar 190 (menyesuaikan ukuran A4)
-        pdf.image(img_path, x=10, y=10, w=190)
+        pdf.image(tmp_path, x=10, y=10, w=190)
         
+        try: os.remove(tmp_path)
+        except: pass
+    
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
         pdf.output(tmp_pdf.name)
         with open(tmp_pdf.name, "rb") as f:
             pdf_data = f.read()
             
-    # Membersihkan semua file gambar temporer agar server tidak penuh
-    for img_path in image_paths:
-        try: os.remove(img_path)
-        except: pass
-        
     try: os.remove(tmp_pdf.name)
     except: pass
     
@@ -44,9 +50,31 @@ def create_pdf(image_paths):
 def main():
     st.title("Ekspor Gambar PJB NOP Palangkaraya ke PDF")
     
+    # 1. KOTAK UPLOAD JSON (JALUR PINTAS ANTI RIBET)
+    st.info("💡 Karena keamanan Google Drive sangat ketat, silakan unggah file kunci JSON Anda di bawah ini untuk membuka gembok unduhan.")
+    uploaded_json = st.file_uploader("🔑 Unggah File JSON Service Account Google Anda di sini", type="json")
+    
+    if not uploaded_json:
+        st.warning("Mohon unggah file JSON Anda terlebih dahulu agar aplikasi bisa menembus keamanan Google Drive.")
+        return
+        
+    # Memproses kredensial Google
+    try:
+        creds_dict = json.load(uploaded_json)
+        # Kita hanya minta izin untuk membaca Drive
+        SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+        drive_service = build('drive', 'v3', credentials=creds)
+        st.success("✅ File Kunci JSON diterima! Aplikasi siap menembus sistem Google Drive.")
+    except Exception as e:
+        st.error("🚨 File JSON tidak valid atau rusak. Pastikan file yang diunggah benar.")
+        return
+
+    st.markdown("---")
+    
+    # 2. MEMBACA SPREADSHEET
     SHEET_ID = "1HvgVicTWwO4RMQI6ZR3Mu3IgGicwjcLZl9mDN1auvJU"
     SHEET_NAME = "Form PJB" 
-    
     encoded_sheet_name = urllib.parse.quote(SHEET_NAME)
     csv_export_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={encoded_sheet_name}"
     
@@ -54,14 +82,13 @@ def main():
         try:
             df = pd.read_csv(csv_export_url)
         except Exception:
-            st.error("🚨 Gagal membaca Spreadsheet. Pastikan link Sheet publik.")
+            st.error("🚨 Gagal membaca Spreadsheet.")
             return
 
     if df.empty:
         st.warning("Data kosong.")
         return
 
-    # Ambil kolom tanggal (kolom index 0)
     date_col = df.columns[0]
     df['Date_Parsed'] = pd.to_datetime(df[date_col], dayfirst=True, errors='coerce').dt.date
     df = df.dropna(subset=['Date_Parsed'])
@@ -80,11 +107,7 @@ def main():
     mask = (df['Date_Parsed'] >= start_date) & (df['Date_Parsed'] <= end_date)
     filtered_df = df.loc[mask]
     
-    st.write(f"Ditemukan **{len(filtered_df)} baris data** pada rentang waktu ini.")
-    
-    # ---------------------------------------------------------
-    # MENAMPILKAN TABEL HANYA UNTUK KOLOM E(4), G(6), DAN U(20)
-    # ---------------------------------------------------------
+    # Menampilkan Tabel Simpel (E, G, U)
     try:
         cols_to_show = []
         if df.shape[1] > 4: cols_to_show.append(df.columns[4])
@@ -100,22 +123,21 @@ def main():
         
     st.markdown("---")
 
+    # 3. PROSES UNDUH & BUAT PDF
     if st.button("Tarik Gambar & Proses PDF"):
         if filtered_df.empty:
             st.warning("Tidak ada data untuk tanggal ini.")
             return
             
-        image_paths = []
+        images_bytes = []
         progress_bar = st.progress(0, text="Memulai pemindaian tautan Drive...")
         total_rows = len(filtered_df)
         
         total_links_found = 0
         total_downloads_success = 0
         
-        with st.spinner("Memindai sel dan mengunduh gambar menggunakan mesin GDOWN..."):
+        with st.spinner("Sistem sedang mengunduh gambar menggunakan Akses Resmi Google API..."):
             for idx, (index, row) in enumerate(filtered_df.iterrows()):
-                
-                # SENSOR: Pindai semua sel untuk mencari link Drive
                 for col_name in df.columns:
                     cell_value = str(row[col_name])
                     
@@ -125,28 +147,28 @@ def main():
                             file_id = extract_file_id(u.strip())
                             if file_id:
                                 total_links_found += 1
-                                
-                                # Menggunakan library gdown untuk membypass blokir
-                                tmp_path = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg").name
+                                # --- PROSES UNDUH RESMI ---
                                 try:
-                                    res = gdown.download(id=file_id, output=tmp_path, quiet=True)
-                                    if res:
-                                        image_paths.append(tmp_path)
-                                        total_downloads_success += 1
-                                    else:
-                                        os.remove(tmp_path) # Hapus jika gagal
-                                except Exception:
-                                    try: os.remove(tmp_path)
-                                    except: pass
+                                    request = drive_service.files().get_media(fileId=file_id)
+                                    fh = BytesIO()
+                                    downloader = MediaIoBaseDownload(fh, request)
+                                    done = False
+                                    while done is False:
+                                        status, done = downloader.next_chunk()
+                                    fh.seek(0)
+                                    images_bytes.append(fh)
+                                    total_downloads_success += 1
+                                except Exception as e:
+                                    pass # Abaikan jika file gagal ditarik (misal: izin belum diberikan)
                                     
                 progress_bar.progress(int(((idx + 1) / total_rows) * 100), text=f"Selesai memproses baris ke-{idx + 1}")
 
-        st.info(f"📊 Laporan Sistem: Ditemukan {total_links_found} tautan Google Drive, dan berhasil mengunduh {total_downloads_success} gambar.")
+        st.info(f"📊 Laporan: Ditemukan {total_links_found} tautan, berhasil mengunduh {total_downloads_success} gambar.")
 
-        if image_paths:
+        if images_bytes:
             with st.spinner("Merakit gambar menjadi file PDF..."):
                 try:
-                    pdf_data = create_pdf(image_paths)
+                    pdf_data = create_pdf(images_bytes)
                     st.success("🎉 PDF Berhasil Dibuat!")
                     st.download_button(
                         label="📥 Klik di Sini untuk Unduh PDF Laporan",
@@ -155,17 +177,13 @@ def main():
                         mime="application/pdf"
                     )
                 except Exception as e:
-                    st.error("Gagal menyatukan gambar ke PDF. Pastikan format file memang berupa gambar (bukan video/dokumen).")
+                    st.error("Gagal menyatukan gambar ke PDF.")
                     st.code(traceback.format_exc())
         else:
             if total_links_found > 0:
-                st.error("Sistem menemukan link-nya, namun Google Drive Anda memiliki keamanan tingkat tinggi yang menolak aplikasi eksternal (mungkin terikat oleh keamanan email perusahaan/Workspace).")
+                st.error("Aplikasi gagal mengunduh meskipun pakai JSON. KEMUNGKINAN BESAR: Anda belum membagikan Folder Drive Anda ke 'client_email' yang ada di dalam file JSON.")
             else:
-                st.warning("Tidak ada link Google Drive yang terdeteksi sama sekali pada rentang tanggal tersebut.")
+                st.warning("Tidak ada link Google Drive yang terdeteksi.")
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        st.error("🚨 TERJADI KESALAHAN FATAL PADA SISTEM!")
-        st.code(traceback.format_exc())
+    main()
