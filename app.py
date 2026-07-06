@@ -6,6 +6,7 @@ import os
 import urllib.parse
 import datetime
 import requests
+import base64
 from fpdf import FPDF
 from io import BytesIO
 from PIL import Image
@@ -13,25 +14,23 @@ from PIL import Image
 st.set_page_config(page_title="PDF Generator PJB", layout="wide")
 
 def extract_file_id(url):
-    """Mengekstrak ID file unik dari URL Google Drive"""
     if not isinstance(url, str): return None
     match = re.search(r'([a-zA-Z0-9_-]{25,})', url)
     return match.group(1) if match else None
 
 def main():
     st.title("Ekspor Gambar PJB NOP Palangkaraya ke PDF")
+    st.success("⚡ SISTEM TERBARU: Menggunakan Jembatan API Internal Workspace")
     
-    st.info("💡 Karena folder Anda sudah diset Publik ('Siapa saja yang memiliki link'), masukkan API Key Anda untuk melewati pemblokiran bot Google.")
-    # Kotak input untuk API Key
-    api_key = st.text_input("🔑 Paste API Key Google Cloud Anda di sini:", type="password")
+    # Masukkan URL Web App dari Apps Script Anda di sini
+    WEB_APP_URL = st.text_input("🔗 Paste URL Aplikasi Web (Apps Script) Anda di sini:", type="password")
     
-    if not api_key:
-        st.warning("Menunggu API Key dimasukkan...")
+    if not WEB_APP_URL:
+        st.warning("Menunggu URL Aplikasi Web dimasukkan...")
         return
 
     st.markdown("---")
     
-    # 1. BACA DATA SPREADSHEET
     SHEET_ID = "1HvgVicTWwO4RMQI6ZR3Mu3IgGicwjcLZl9mDN1auvJU"
     SHEET_NAME = "Form PJB" 
     csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={urllib.parse.quote(SHEET_NAME)}"
@@ -40,10 +39,9 @@ def main():
         try:
             df = pd.read_csv(csv_url)
         except Exception as e:
-            st.error("🚨 Gagal membaca Spreadsheet. Pastikan link Sheet sudah Publik.")
+            st.error("🚨 Gagal membaca Spreadsheet.")
             return
 
-    # 2. FILTER TANGGAL
     date_col = df.columns[0]
     df['Date_Parsed'] = pd.to_datetime(df[date_col], dayfirst=True, errors='coerce').dt.date
     df = df.dropna(subset=['Date_Parsed'])
@@ -58,7 +56,6 @@ def main():
     filtered_df = df[(df['Date_Parsed'] >= start_date) & (df['Date_Parsed'] <= end_date)]
     st.write(f"Ditemukan **{len(filtered_df)} baris data**.")
     
-    # TABEL SIMPEL (Kolom E, G, U)
     try:
         show_cols = []
         if df.shape[1] > 4: show_cols.append(df.columns[4])
@@ -74,7 +71,6 @@ def main():
         
     st.markdown("---")
 
-    # 3. PROSES UNDUH MENGGUNAKAN API KEY
     if st.button("🚀 MULAI TARIK GAMBAR & PROSES PDF"):
         if filtered_df.empty:
             st.warning("Tidak ada data untuk diproses.")
@@ -87,7 +83,7 @@ def main():
         total_links_found = 0
         total_downloads_success = 0
         
-        with st.spinner("Mengunduh gambar menggunakan Jalur API Key..."):
+        with st.spinner("Mengunduh gambar menembus Workspace via API Internal..."):
             for idx, (index, row) in enumerate(filtered_df.iterrows()):
                 for col_name in df.columns:
                     cell_value = str(row[col_name])
@@ -99,18 +95,16 @@ def main():
                             if fid:
                                 total_links_found += 1
                                 
-                                # REQUEST SUPER KUAT: Membaca file via API Drive V3 menggunakan API KEY
-                                url = f"https://www.googleapis.com/drive/v3/files/{fid}?alt=media&key={api_key.strip()}"
+                                # REQUEST KE JEMBATAN APPS SCRIPT
+                                req_url = f"{WEB_APP_URL.strip()}?id={fid}"
                                 
                                 try:
-                                    r = requests.get(url, timeout=15)
-                                    if r.status_code == 200:
-                                        # Validasi ketat bahwa ini gambar asli
-                                        content_bytes = r.content
-                                        with Image.open(BytesIO(content_bytes)) as test_img:
-                                            test_img.verify() 
-                                            
-                                        with Image.open(BytesIO(content_bytes)) as real_img:
+                                    r = requests.get(req_url, timeout=20)
+                                    if r.status_code == 200 and not r.text.startswith("ERROR"):
+                                        # Decode data base64 dari Google
+                                        image_data = base64.b64decode(r.text)
+                                        
+                                        with Image.open(BytesIO(image_data)) as real_img:
                                             if real_img.mode != 'RGB':
                                                 real_img = real_img.convert('RGB')
                                             
@@ -119,13 +113,12 @@ def main():
                                             img_paths.append(tmp_file.name)
                                             total_downloads_success += 1
                                 except Exception as e:
-                                    pass # Abaikan file jika masih ditolak atau rusak
+                                    pass
                                         
                 progress_bar.progress(int(((idx + 1) / total_rows) * 100))
 
-        st.info(f"📊 Laporan: Mendeteksi {total_links_found} tautan Drive, berhasil mengamankan {total_downloads_success} foto.")
+        st.info(f"📊 Laporan: Mendeteksi {total_links_found} tautan, berhasil menarik {total_downloads_success} foto.")
 
-        # 4. RAKIT KE PDF
         if img_paths:
             with st.spinner("Merakit gambar ke dalam halaman PDF..."):
                 try:
@@ -154,7 +147,7 @@ def main():
                 except Exception as pdf_err:
                     st.error(f"Gagal merakit PDF: {pdf_err}")
         else:
-            st.error("Semua unduhan ditolak. Google Workspace masih mengunci file Anda.")
+            st.error("Gagal menarik foto. Periksa kembali URL Aplikasi Web Anda.")
 
 if __name__ == "__main__":
     main()
