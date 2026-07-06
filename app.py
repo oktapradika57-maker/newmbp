@@ -20,9 +20,9 @@ def extract_file_id(url):
 
 def main():
     st.title("Ekspor Gambar PJB NOP Palangkaraya ke PDF")
-    st.success("⚡ SISTEM TERBARU: Menggunakan Jembatan API Internal Workspace")
+    st.success("⚡ SISTEM TERBARU: Jembatan API Workspace + Filter Role Interaktif")
     
-    # Masukkan URL Web App dari Apps Script Anda di sini
+    # URL Web App dari Apps Script
     WEB_APP_URL = st.text_input("🔗 Paste URL Aplikasi Web (Apps Script) Anda di sini:", type="password")
     
     if not WEB_APP_URL:
@@ -31,6 +31,7 @@ def main():
 
     st.markdown("---")
     
+    # 1. BACA DATA SPREADSHEET
     SHEET_ID = "1HvgVicTWwO4RMQI6ZR3Mu3IgGicwjcLZl9mDN1auvJU"
     SHEET_NAME = "Form PJB" 
     csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={urllib.parse.quote(SHEET_NAME)}"
@@ -42,25 +43,43 @@ def main():
             st.error("🚨 Gagal membaca Spreadsheet.")
             return
 
+    # 2. PERSIAPAN KOLOM TANGGAL & ROLE
     date_col = df.columns[0]
+    role_col = df.columns[5] # Kolom F adalah index ke-5 (A=0, B=1, C=2, D=3, E=4, F=5)
+    
     df['Date_Parsed'] = pd.to_datetime(df[date_col], dayfirst=True, errors='coerce').dt.date
     df = df.dropna(subset=['Date_Parsed'])
-
-    st.subheader("🗓️ Filter Tanggal Laporan")
-    col1, col2 = st.columns(2)
-    with col1:
-        start_date = col1.date_input("Tanggal Mulai", value=datetime.date.today())
-    with col2:
-        end_date = col2.date_input("Tanggal Akhir", value=datetime.date.today())
-        
-    filtered_df = df[(df['Date_Parsed'] >= start_date) & (df['Date_Parsed'] <= end_date)]
-    st.write(f"Ditemukan **{len(filtered_df)} baris data**.")
     
+    # Mengambil daftar Role unik dari Kolom F (menghapus yang kosong)
+    daftar_role = ["Semua Role"] + df[role_col].dropna().astype(str).unique().tolist()
+
+    # 3. AREA FILTER (TANGGAL & ROLE)
+    st.subheader("⚙️ Filter Data Laporan")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        start_date = st.date_input("Tanggal Mulai", value=datetime.date.today())
+    with col2:
+        end_date = st.date_input("Tanggal Akhir", value=datetime.date.today())
+    with col3:
+        selected_role = st.selectbox("Pilih Role (Kolom F)", options=daftar_role)
+        
+    # Terapkan Filter Tanggal
+    filtered_df = df[(df['Date_Parsed'] >= start_date) & (df['Date_Parsed'] <= end_date)]
+    
+    # Terapkan Filter Role (Jika tidak memilih "Semua Role")
+    if selected_role != "Semua Role":
+        filtered_df = filtered_df[filtered_df[role_col].astype(str) == selected_role]
+        
+    st.write(f"Ditemukan *{len(filtered_df)} baris data* sesuai filter di atas.")
+    
+    # 4. TABEL PRATINJAU
     try:
         show_cols = []
-        if df.shape[1] > 4: show_cols.append(df.columns[4])
-        if df.shape[1] > 6: show_cols.append(df.columns[6])
-        if df.shape[1] > 20: show_cols.append(df.columns[20])
+        if df.shape[1] > 4: show_cols.append(df.columns[4]) # Kolom E
+        if df.shape[1] > 5: show_cols.append(df.columns[5]) # Kolom F (Role) untuk verifikasi
+        if df.shape[1] > 6: show_cols.append(df.columns[6]) # Kolom G
+        if df.shape[1] > 20: show_cols.append(df.columns[20]) # Kolom U
         
         if show_cols:
             st.dataframe(filtered_df[show_cols])
@@ -71,9 +90,10 @@ def main():
         
     st.markdown("---")
 
+    # 5. PROSES UNDUH & PDF
     if st.button("🚀 MULAI TARIK GAMBAR & PROSES PDF"):
         if filtered_df.empty:
-            st.warning("Tidak ada data untuk diproses.")
+            st.warning("Tidak ada data untuk diproses dengan filter tersebut.")
             return
             
         img_paths = []
@@ -101,7 +121,6 @@ def main():
                                 try:
                                     r = requests.get(req_url, timeout=20)
                                     if r.status_code == 200 and not r.text.startswith("ERROR"):
-                                        # Decode data base64 dari Google
                                         image_data = base64.b64decode(r.text)
                                         
                                         with Image.open(BytesIO(image_data)) as real_img:
@@ -130,24 +149,27 @@ def main():
                         try: os.remove(img_path)
                         except: pass
                         
-                    pdf_output_name = "Laporan_Gambar_PJB.pdf"
+                    # Penamaan PDF menyesuaikan Role yang dipilih
+                    role_name_clean = "SemuaRole" if selected_role == "Semua Role" else str(selected_role).replace(" ", "_")
+                    pdf_output_name = f"Laporan_PJB_{role_name_clean}.pdf"
+                    
                     pdf.output(pdf_output_name)
                     
                     with open(pdf_output_name, "rb") as f:
                         st.download_button(
                             label="📥 KLIK DI SINI UNTUK UNDUH FILE PDF",
                             data=f,
-                            file_name=f"Laporan_Gambar_PJB_{start_date}_sd_{end_date}.pdf",
+                            file_name=f"Laporan_Gambar_PJB_{role_name_clean}{start_date}_sd{end_date}.pdf",
                             mime="application/pdf"
                         )
                     
                     try: os.remove(pdf_output_name)
                     except: pass
-                    st.success("🎉 Luar Biasa! PDF berhasil dibuat berurutan dengan sempurna!")
+                    st.success("🎉 Luar Biasa! PDF berhasil dibuat sesuai filter dengan sempurna!")
                 except Exception as pdf_err:
                     st.error(f"Gagal merakit PDF: {pdf_err}")
         else:
             st.error("Gagal menarik foto. Periksa kembali URL Aplikasi Web Anda.")
 
-if __name__ == "__main__":
+if _name_ == "_main_":
     main()
