@@ -171,5 +171,5 @@ def main():
         else:
             st.error("Gagal menarik foto. Periksa kembali URL Aplikasi Web Anda.")
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     main()
