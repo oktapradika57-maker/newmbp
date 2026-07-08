@@ -19,7 +19,7 @@ def extract_file_id(url):
     return match.group(1) if match else None
 
 def main():
-    st.title("Ekspor Gambar PJB NOP Palangkaraya ke PDF")
+    st.title("AI PJB NOP PALANGKARAYA")
     st.success("⚡ SISTEM FINAL: Filter Tanggal + Filter Role (Kolom F) + Filter Foto (N-T)")
     
     # ==========================================
