@@ -20,9 +20,11 @@ def extract_file_id(url):
 
 def main():
     st.title("Ekspor Gambar PJB NOP Palangkaraya ke PDF")
-    st.success("⚡ SISTEM TERBARU: Dilengkapi Filter Kolom Foto N-T")
+    st.success("⚡ SISTEM FINAL: Filter Tanggal + Filter Role (Kolom F) + Filter Foto (N-T)")
     
-    # URL Web App dari Apps Script
+    # ==========================================
+    # INPUT JEMBATAN API
+    # ==========================================
     WEB_APP_URL = st.text_input("🔗 Paste URL Aplikasi Web (Apps Script) Anda di sini:", type="password")
     
     if not WEB_APP_URL:
@@ -31,7 +33,9 @@ def main():
 
     st.markdown("---")
     
-    # 1. BACA SPREADSHEET
+    # ==========================================
+    # BACA DATA SPREADSHEET
+    # ==========================================
     SHEET_ID = "1HvgVicTWwO4RMQI6ZR3Mu3IgGicwjcLZl9mDN1auvJU"
     SHEET_NAME = "Form PJB" 
     csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={urllib.parse.quote(SHEET_NAME)}"
@@ -43,7 +47,9 @@ def main():
             st.error("🚨 Gagal membaca Spreadsheet.")
             return
 
-    # 2. FILTER TANGGAL
+    # ==========================================
+    # FILTER 1: TANGGAL
+    # ==========================================
     date_col = df.columns[0]
     df['Date_Parsed'] = pd.to_datetime(df[date_col], dayfirst=True, errors='coerce').dt.date
     df = df.dropna(subset=['Date_Parsed'])
@@ -56,23 +62,61 @@ def main():
         end_date = col2.date_input("Tanggal Akhir", value=datetime.date.today())
         
     filtered_df = df[(df['Date_Parsed'] >= start_date) & (df['Date_Parsed'] <= end_date)]
-    st.write(f"Ditemukan **{len(filtered_df)} baris data** pada rentang tanggal ini.")
     
+    # ==========================================
+    # FILTER 2: ROLE (KOLOM F) - BARU DIKEMBALIKAN
+    # ==========================================
+    if df.shape[1] > 5:
+        role_col = df.columns[5] # Index 5 adalah Kolom F
+        st.subheader("👥 Filter Role / Petugas")
+        
+        # Ambil daftar role unik yang ada pada tanggal terpilih
+        available_roles = sorted(filtered_df[role_col].dropna().unique().tolist())
+        
+        selected_roles = st.multiselect(
+            "Pilih Role yang ingin dimasukkan ke PDF (Hapus yang tidak diperlukan):",
+            options=available_roles,
+            default=available_roles
+        )
+        
+        # Terapkan filter Role ke dalam data
+        filtered_df = filtered_df[filtered_df[role_col].isin(selected_roles)]
+
+    st.write(f"Ditemukan **{len(filtered_df)} baris data** yang sesuai dengan filter Tanggal dan Role.")
+    
+    # ==========================================
+    # MENAMPILKAN TABEL PREVIEW (E, F, G, U)
+    # ==========================================
+    try:
+        show_cols = []
+        if df.shape[1] > 4: show_cols.append(df.columns[4])  # E
+        if df.shape[1] > 5: show_cols.append(df.columns[5])  # F (Role)
+        if df.shape[1] > 6: show_cols.append(df.columns[6])  # G
+        if df.shape[1] > 20: show_cols.append(df.columns[20]) # U
+        
+        if show_cols:
+            st.dataframe(filtered_df[show_cols])
+        else:
+            st.dataframe(filtered_df)
+    except:
+        st.dataframe(filtered_df)
+        
     st.markdown("---")
 
-    # 3. FILTER MULTIPLE KOLOM FOTO (N - T)
+    # ==========================================
+    # FILTER 3: KOLOM FOTO N-T
+    # ==========================================
     st.subheader("📸 Pilih Bagian Foto yang Ingin Diunduh")
     
-    # Mengambil nama kolom dari N (index 13) sampai T (index 19)
     try:
-        kolom_tersedia = df.columns[13:20].tolist()
+        kolom_tersedia = df.columns[13:20].tolist() # Kolom N sampai T
     except:
-        kolom_tersedia = df.columns.tolist() # Jaga-jaga jika jumlah kolom kurang
+        kolom_tersedia = df.columns.tolist()
 
     kolom_pilihan = st.multiselect(
-        "Pilih satu atau beberapa kolom (hapus yang tidak perlu):",
+        "Pilih kolom foto yang diperlukan (Silakan hapus silang kolom foto yang ingin dilewati):",
         options=kolom_tersedia,
-        default=kolom_tersedia # Secara default semua terpilih
+        default=kolom_tersedia
     )
 
     if not kolom_pilihan:
@@ -81,7 +125,9 @@ def main():
 
     st.markdown("---")
 
-    # 4. PROSES UNDUH & RAKIT PDF
+    # ==========================================
+    # PROSES UNDUH & RAKIT PDF
+    # ==========================================
     if st.button("🚀 MULAI TARIK GAMBAR & PROSES PDF"):
         if filtered_df.empty:
             st.warning("Tidak ada data untuk diproses.")
@@ -97,7 +143,6 @@ def main():
         with st.spinner("Mengunduh gambar menembus Workspace via API Internal..."):
             for idx, (index, row) in enumerate(filtered_df.iterrows()):
                 
-                # HANYA memindai kolom yang dipilih pengguna
                 for col_name in kolom_pilihan:
                     cell_value = str(row[col_name])
                     
@@ -107,8 +152,6 @@ def main():
                             fid = extract_file_id(u.strip())
                             if fid:
                                 total_links_found += 1
-                                
-                                # REQUEST KE JEMBATAN APPS SCRIPT
                                 req_url = f"{WEB_APP_URL.strip()}?id={fid}"
                                 
                                 try:
@@ -161,6 +204,5 @@ def main():
         else:
             st.error("Gagal menarik foto. Periksa kembali URL Aplikasi Web Anda.")
 
-# PERBAIKAN TYPO ADA DI SINI:
 if __name__ == "__main__":
     main()
